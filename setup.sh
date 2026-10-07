@@ -19,12 +19,15 @@ pip install --quiet flask requests beautifulsoup4
 echo "[3/4] Initialising database..."
 python db.py
 
-# 4. Offer to run initial scrape
+# 4. Set up cron for automatic weekly updates
+echo "[4/4] Setting up automatic weekly updates..."
+bash setup_cron.sh
+
 echo ""
 echo "Setup complete."
 echo ""
 echo "Next steps:"
-echo "  Initial DB scrape (do this once, needs WiFi, takes ~15-20 min):"
+echo "  Initial DB scrape (do this once, needs WiFi, takes 30-60 min):"
 echo "    python scraper.py"
 echo ""
 echo "  Then start the server:"
