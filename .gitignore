@@ -1,0 +1,23 @@
+# Database — rebuilt locally via scraper
+sigid.db
+
+# Media cache — downloaded locally via scraper
+media/
+
+# Secrets
+config.py
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+
+# Logs
+*.log
+scraper.log
+
+# OS
+.DS_Store
+Thumbs.db
