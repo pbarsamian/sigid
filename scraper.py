@@ -30,13 +30,16 @@ os.makedirs(MEDIA_DIR, exist_ok=True)
 # Low-level API helpers
 # ---------------------------------------------------------------------------
 
+UA = "sigid-termux/1.0 (https://github.com/pbarsamian/sigid; personal SDR tool)"
+
 def api_get(params, retries=3, delay=1.5):
     """GET the MediaWiki API and return parsed JSON."""
     params["format"] = "json"
     url = WIKI_API + "?" + urllib.parse.urlencode(params)
     for attempt in range(retries):
         try:
-            with urllib.request.urlopen(url, timeout=15) as resp:
+            req = urllib.request.Request(url, headers={"User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=15) as resp:
                 return json.loads(resp.read().decode())
         except Exception as e:
             print(f"  API error (attempt {attempt+1}): {e}")
@@ -50,7 +53,10 @@ def download_file(url, dest_path, retries=2):
         return dest_path
     for attempt in range(retries):
         try:
-            urllib.request.urlretrieve(url, dest_path)
+            req = urllib.request.Request(url, headers={"User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                with open(dest_path, "wb") as f:
+                    f.write(resp.read())
             return dest_path
         except Exception as e:
             print(f"    Download error {url} (attempt {attempt+1}): {e}")
