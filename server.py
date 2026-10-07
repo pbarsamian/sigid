@@ -251,21 +251,31 @@ async function runSearch() {
 function renderResults(data) {
   // LLM result
   const llmDiv = document.getElementById('llmResult');
-  if (data.llm_result && !data.llm_result.error) {
+  if (data.llm_result) {
     const r = data.llm_result;
-    const confClass = r.confidence === 'high' ? 'conf-high' :
-                      r.confidence === 'medium' ? 'conf-medium' : 'conf-low';
-    llmDiv.innerHTML = `
-      <div class="llm-card">
-        <h3>🤖 AI Identification</h3>
-        <div class="name">${r.identification || '—'}
-          <span class="${confClass}" style="font-size:0.8rem;font-weight:400;margin-left:8px">
-            ${r.confidence || ''} confidence</span>
-        </div>
-        ${r.modulation ? `<div class="meta">Modulation: ${r.modulation}</div>` : ''}
-        ${r.reasoning ? `<div class="desc" style="margin-top:8px">${r.reasoning}</div>` : ''}
-        ${r.next_steps ? `<div class="desc" style="margin-top:6px;color:var(--muted)">Next: ${r.next_steps}</div>` : ''}
-      </div>`;
+    if (r.error) {
+      llmDiv.innerHTML = `
+        <div class="llm-card" style="border-color:var(--warn)">
+          <h3 style="color:var(--warn)">🤖 AI Error</h3>
+          <div class="desc">${r.error}</div>
+        </div>`;
+    } else {
+      const confClass = r.confidence === 'high' ? 'conf-high' :
+                        r.confidence === 'medium' ? 'conf-medium' : 'conf-low';
+      llmDiv.innerHTML = `
+        <div class="llm-card">
+          <h3>🤖 AI Identification</h3>
+          <div class="name">${r.identification || '—'}
+            <span class="${confClass}" style="font-size:0.8rem;font-weight:400;margin-left:8px">
+              ${r.confidence || ''} confidence</span>
+          </div>
+          ${r.modulation ? `<div class="meta">Modulation: ${r.modulation}</div>` : ''}
+          ${r.frequency_range ? `<div class="meta">Frequency: ${r.frequency_range}</div>` : ''}
+          ${r.reasoning ? `<div class="desc" style="margin-top:8px">${r.reasoning}</div>` : ''}
+          ${r.next_steps ? `<div class="desc" style="margin-top:6px;color:var(--muted)">Next: ${r.next_steps}</div>` : ''}
+          ${r.wiki_search ? `<div style="margin-top:8px"><a href="https://www.sigidwiki.com/wiki/Special:Search?search=${encodeURIComponent(r.wiki_search)}" target="_blank">→ Search Signal ID Wiki</a></div>` : ''}
+        </div>`;
+    }
   } else {
     llmDiv.innerHTML = '';
   }
@@ -357,6 +367,13 @@ def api_identify():
         image_b64=img_b64,
         use_llm=use_llm,
     )
+
+    # log llm_result to terminal for debugging
+    if result.get("llm_result"):
+        print("LLM result:", result["llm_result"])
+    else:
+        print("LLM result: None (use_llm={}, image={})".format(
+            use_llm, "yes" if img_b64 else "no"))
 
     # make JSON-serialisable
     result["db_matches"] = [
