@@ -18,6 +18,23 @@ CLAUDE_API = "https://api.anthropic.com/v1/messages"
 CLAUDE_MODEL = "claude-sonnet-4-6"
 
 
+def _load_api_key():
+    """Load Claude API key from .env file or environment variable."""
+    # check environment first
+    key = os.environ.get("ANTHROPIC_API_KEY")
+    if key:
+        return key
+    # fall back to .env file next to this script
+    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("ANTHROPIC_API_KEY="):
+                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Tier 1 + 2: local DB matching
 # ---------------------------------------------------------------------------
@@ -195,10 +212,18 @@ Return only the JSON object, no preamble."""
         ],
     }).encode()
 
+    api_key = _load_api_key()
+    if not api_key:
+        return {"error": "No API key found. Create a .env file with ANTHROPIC_API_KEY=sk-ant-..."}
+
     req = urllib.request.Request(
         CLAUDE_API,
         data=payload,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+        },
         method="POST",
     )
 
