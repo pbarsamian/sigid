@@ -35,23 +35,47 @@ UA = "sigid-termux/1.0 (https://github.com/pbarsamian/sigid; personal SDR tool)"
 # Tracks consecutive failures so we can back off adaptively
 _consecutive_failures = 0
 
-def api_get(params, retries=5, base_delay=2.0):
+# Baseline pause between every request — high enough to avoid 429s
+REQUEST_DELAY = 3.0   # seconds between normal requests
+
+
+def _fetch_url(url, timeout=30):
+    """
+    Fetch a URL, honouring 429 Retry-After.
+    Returns (response_bytes, None) on success or (None, error_string) on failure.
+    """
+    import urllib.error
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read(), None
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            retry_after = int(e.headers.get("Retry-After", 60))
+            print(f"  429 Too Many Requests — sleeping {retry_after}s as requested by server")
+            time.sleep(retry_after)
+            return None, f"429 (retry-after {retry_after}s)"
+        return None, f"HTTP {e.code}: {e.reason}"
+    except Exception as e:
+        return None, str(e)
+
+
+def api_get(params, retries=5, base_delay=5.0):
     """GET the MediaWiki API and return parsed JSON. Exponential backoff on failure."""
     global _consecutive_failures
     params["format"] = "json"
     url = WIKI_API + "?" + urllib.parse.urlencode(params)
+
     for attempt in range(retries):
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": UA})
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                data = json.loads(resp.read().decode())
-            _consecutive_failures = 0   # reset on success
-            return data
-        except Exception as e:
-            _consecutive_failures += 1
-            wait = base_delay * (2 ** attempt)   # 2s, 4s, 8s, 16s, 32s
-            print(f"  API error (attempt {attempt+1}/{retries}): {e} — waiting {wait:.0f}s")
-            time.sleep(wait)
+        data, err = _fetch_url(url)
+        if data is not None:
+            _consecutive_failures = 0
+            return json.loads(data.decode())
+        _consecutive_failures += 1
+        wait = base_delay * (2 ** attempt)   # 5s, 10s, 20s, 40s, 80s
+        print(f"  API error (attempt {attempt+1}/{retries}): {err} — waiting {wait:.0f}s")
+        time.sleep(wait)
+
     return None
 
 
@@ -60,16 +84,14 @@ def download_file(url, dest_path, retries=3):
     if os.path.exists(dest_path):
         return dest_path
     for attempt in range(retries):
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": UA})
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                with open(dest_path, "wb") as f:
-                    f.write(resp.read())
+        data, err = _fetch_url(url)
+        if data is not None:
+            with open(dest_path, "wb") as f:
+                f.write(data)
             return dest_path
-        except Exception as e:
-            wait = 2 * (2 ** attempt)
-            print(f"    Download error (attempt {attempt+1}/{retries}): {e} — waiting {wait:.0f}s")
-            time.sleep(wait)
+        wait = 5 * (2 ** attempt)
+        print(f"    Download error (attempt {attempt+1}/{retries}): {err} — waiting {wait:.0f}s")
+        time.sleep(wait)
     return None
 
 
@@ -123,7 +145,7 @@ def get_all_page_titles():
         apcontinue = data.get("continue", {}).get("apcontinue")
         if not apcontinue:
             break
-        time.sleep(0.5)
+        time.sleep(REQUEST_DELAY)
 
     print(f"Found {len(titles)} signal pages via namespace walk.")
     return titles
@@ -350,11 +372,11 @@ def upsert_signal(page_data):
         if any(lower.endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".gif")):
             if waterfall_url is None:
                 waterfall_url = resolve_image_url(img_title)
-                time.sleep(0.3)
+                time.sleep(REQUEST_DELAY)
         elif any(lower.endswith(ext) for ext in (".mp3", ".ogg", ".wav")):
             if audio_url is None:
                 audio_url = resolve_image_url(img_title)
-                time.sleep(0.3)
+                time.sleep(REQUEST_DELAY)
 
     # cache media locally
     safe_name = re.sub(r"[^\w\-]", "_", title)
@@ -449,11 +471,11 @@ def full_scrape():
             upsert_signal(page_data)
         # back off more if we've been hitting errors
         if _consecutive_failures >= 3:
-            sleep_time = 5.0
+            sleep_time = REQUEST_DELAY * 4
         elif _consecutive_failures >= 1:
-            sleep_time = 2.0
+            sleep_time = REQUEST_DELAY * 2
         else:
-            sleep_time = 1.0   # baseline — polite but not too slow
+            sleep_time = REQUEST_DELAY
         time.sleep(sleep_time)
 
     now = datetime.now(timezone.utc).isoformat()
