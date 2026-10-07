@@ -71,103 +71,43 @@ def download_file(url, dest_path, retries=2):
 
 def get_all_page_titles():
     """
-    Return list of (page_id, title) for every identified signal page.
-    Uses SMW Special:Ask API first, falls back to namespace enumeration.
+    Return list of (page_id, title) for every signal page.
+    Walks all pages in the main namespace and filters out known meta pages.
     """
-    titles = _smw_ask_titles()
-    if titles:
-        print(f"Found {len(titles)} signal pages via SMW query.")
-        return titles
-
-    print("SMW query returned nothing, falling back to namespace walk...")
-    titles = _namespace_walk_titles()
-    print(f"Found {len(titles)} signal pages via namespace walk.")
-    return titles
-
-
-def _smw_ask_titles():
-    """Query Semantic MediaWiki for all pages with a Frequency property (= signal pages)."""
-    titles = []
-    offset = 0
-    limit  = 500
-
-    while True:
-        params = {
-            "action":  "ask",
-            "query":   f"[[Frequency::+]]|?Frequency|limit={limit}|offset={offset}",
-        }
-        data = api_get(params)
-        if not data or "query" not in data:
-            break
-
-        results = data["query"].get("results", {})
-        if not results:
-            break
-
-        for title, info in results.items():
-            page_id = info.get("printouts", {})
-            # resolve page_id via a separate lookup — SMW ask doesn't return numeric IDs
-            titles.append((None, title))
-
-        if len(results) < limit:
-            break
-        offset += limit
-        time.sleep(0.5)
-
-    # resolve page IDs in batches of 50
-    if titles:
-        titles = _resolve_page_ids([t for _, t in titles])
-
-    return titles
-
-
-def _resolve_page_ids(title_list):
-    """Given a list of page titles, return [(page_id, title)] via API query."""
-    resolved = []
-    batch_size = 50
-    for i in range(0, len(title_list), batch_size):
-        batch = title_list[i:i+batch_size]
-        params = {
-            "action": "query",
-            "titles": "|".join(batch),
-            "redirects": "1",
-        }
-        data = api_get(params)
-        if not data:
-            continue
-        pages = data.get("query", {}).get("pages", {})
-        for pid, info in pages.items():
-            if int(pid) > 0:  # negative = missing
-                resolved.append((int(pid), info["title"]))
-        time.sleep(0.3)
-    return resolved
-
-
-def _namespace_walk_titles():
-    """Enumerate all pages in the main namespace (ns=0) as a fallback."""
     titles = []
     apcontinue = None
+
+    # Pages that are wiki infrastructure, not signals
+    SKIP_TITLES = {
+        "Signal_Identification_Guide", "Database", "Comments",
+        "Adding_a_Signal_Entry", "Requested", "Template:DatabaseUNID",
+        "Template:DatabaseQueryUNID", "Regulatory_Databases",
+    }
+    SKIP_PREFIXES = (
+        "Template:", "Help:", "Category:", "Property:",
+        "Form:", "Special:", "Talk:", "Signal_Identification_Wiki:",
+    )
 
     while True:
         params = {
             "action":      "query",
             "list":        "allpages",
-            "apnamespace": "0",
+            "apnamespace": "0",       # main namespace only
             "aplimit":     "500",
-            "apfrom":      apcontinue or "",
         }
+        if apcontinue:
+            params["apfrom"] = apcontinue
+
         data = api_get(params)
         if not data:
             break
 
         pages = data.get("query", {}).get("allpages", [])
         for p in pages:
-            # skip meta/utility pages
             title = p["title"]
-            if any(skip in title for skip in [
-                "Signal_Identification", "Database", "Template",
-                "Adding_a_Signal", "Comments", "Requested",
-            ]):
+            if title in SKIP_TITLES:
+                continue
+            if any(title.startswith(pfx) for pfx in SKIP_PREFIXES):
                 continue
             titles.append((p["pageid"], title))
 
@@ -176,6 +116,7 @@ def _namespace_walk_titles():
             break
         time.sleep(0.5)
 
+    print(f"Found {len(titles)} signal pages via namespace walk.")
     return titles
 
 
