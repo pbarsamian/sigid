@@ -32,35 +32,44 @@ os.makedirs(MEDIA_DIR, exist_ok=True)
 
 UA = "sigid-termux/1.0 (https://github.com/pbarsamian/sigid; personal SDR tool)"
 
-def api_get(params, retries=3, delay=1.5):
-    """GET the MediaWiki API and return parsed JSON."""
+# Tracks consecutive failures so we can back off adaptively
+_consecutive_failures = 0
+
+def api_get(params, retries=5, base_delay=2.0):
+    """GET the MediaWiki API and return parsed JSON. Exponential backoff on failure."""
+    global _consecutive_failures
     params["format"] = "json"
     url = WIKI_API + "?" + urllib.parse.urlencode(params)
     for attempt in range(retries):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": UA})
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                return json.loads(resp.read().decode())
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = json.loads(resp.read().decode())
+            _consecutive_failures = 0   # reset on success
+            return data
         except Exception as e:
-            print(f"  API error (attempt {attempt+1}): {e}")
-            time.sleep(delay)
+            _consecutive_failures += 1
+            wait = base_delay * (2 ** attempt)   # 2s, 4s, 8s, 16s, 32s
+            print(f"  API error (attempt {attempt+1}/{retries}): {e} — waiting {wait:.0f}s")
+            time.sleep(wait)
     return None
 
 
-def download_file(url, dest_path, retries=2):
+def download_file(url, dest_path, retries=3):
     """Download a remote file to dest_path. Returns dest_path or None on failure."""
     if os.path.exists(dest_path):
         return dest_path
     for attempt in range(retries):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": UA})
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            with urllib.request.urlopen(req, timeout=30) as resp:
                 with open(dest_path, "wb") as f:
                     f.write(resp.read())
             return dest_path
         except Exception as e:
-            print(f"    Download error {url} (attempt {attempt+1}): {e}")
-            time.sleep(1)
+            wait = 2 * (2 ** attempt)
+            print(f"    Download error (attempt {attempt+1}/{retries}): {e} — waiting {wait:.0f}s")
+            time.sleep(wait)
     return None
 
 
@@ -438,7 +447,14 @@ def full_scrape():
         page_data = get_page_content(page_id)
         if page_data:
             upsert_signal(page_data)
-        time.sleep(0.5)   # polite crawl rate
+        # back off more if we've been hitting errors
+        if _consecutive_failures >= 3:
+            sleep_time = 5.0
+        elif _consecutive_failures >= 1:
+            sleep_time = 2.0
+        else:
+            sleep_time = 1.0   # baseline — polite but not too slow
+        time.sleep(sleep_time)
 
     now = datetime.now(timezone.utc).isoformat()
     set_meta("last_full_scrape", now)
