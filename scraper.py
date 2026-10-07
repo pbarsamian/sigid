@@ -20,8 +20,8 @@ from datetime import datetime, timezone
 from db import get_conn, init_db, get_meta, set_meta
 
 WIKI_API   = "https://www.sigidwiki.com/api.php"
+WIKI_BASE  = "https://www.sigidwiki.com"
 MEDIA_DIR  = os.path.join(os.path.dirname(__file__), "media")
-SIGNAL_CATEGORY = "Signal_Identification_Guide"
 
 os.makedirs(MEDIA_DIR, exist_ok=True)
 
@@ -65,40 +65,117 @@ def download_file(url, dest_path, retries=2):
 
 
 # ---------------------------------------------------------------------------
-# Category walking — get all page titles in the signal category
+# Page enumeration — uses Special:Ask (Semantic MediaWiki) to get all signals
+# Falls back to namespace walk if SMW ask is unavailable
 # ---------------------------------------------------------------------------
 
 def get_all_page_titles():
-    """Return list of (page_id, title) for every page in the signal category."""
+    """
+    Return list of (page_id, title) for every identified signal page.
+    Uses SMW Special:Ask API first, falls back to namespace enumeration.
+    """
+    titles = _smw_ask_titles()
+    if titles:
+        print(f"Found {len(titles)} signal pages via SMW query.")
+        return titles
+
+    print("SMW query returned nothing, falling back to namespace walk...")
+    titles = _namespace_walk_titles()
+    print(f"Found {len(titles)} signal pages via namespace walk.")
+    return titles
+
+
+def _smw_ask_titles():
+    """Query Semantic MediaWiki for all pages with a Frequency property (= signal pages)."""
     titles = []
-    cmcontinue = None
+    offset = 0
+    limit  = 500
 
     while True:
         params = {
-            "action": "query",
-            "list": "categorymembers",
-            "cmtitle": f"Category:{SIGNAL_CATEGORY}",
-            "cmlimit": "500",
-            "cmtype": "page",
-            "cmprop": "ids|title",
+            "action":  "ask",
+            "query":   f"[[Frequency::+]]|?Frequency|limit={limit}|offset={offset}",
         }
-        if cmcontinue:
-            params["cmcontinue"] = cmcontinue
+        data = api_get(params)
+        if not data or "query" not in data:
+            break
 
+        results = data["query"].get("results", {})
+        if not results:
+            break
+
+        for title, info in results.items():
+            page_id = info.get("printouts", {})
+            # resolve page_id via a separate lookup — SMW ask doesn't return numeric IDs
+            titles.append((None, title))
+
+        if len(results) < limit:
+            break
+        offset += limit
+        time.sleep(0.5)
+
+    # resolve page IDs in batches of 50
+    if titles:
+        titles = _resolve_page_ids([t for _, t in titles])
+
+    return titles
+
+
+def _resolve_page_ids(title_list):
+    """Given a list of page titles, return [(page_id, title)] via API query."""
+    resolved = []
+    batch_size = 50
+    for i in range(0, len(title_list), batch_size):
+        batch = title_list[i:i+batch_size]
+        params = {
+            "action": "query",
+            "titles": "|".join(batch),
+            "redirects": "1",
+        }
+        data = api_get(params)
+        if not data:
+            continue
+        pages = data.get("query", {}).get("pages", {})
+        for pid, info in pages.items():
+            if int(pid) > 0:  # negative = missing
+                resolved.append((int(pid), info["title"]))
+        time.sleep(0.3)
+    return resolved
+
+
+def _namespace_walk_titles():
+    """Enumerate all pages in the main namespace (ns=0) as a fallback."""
+    titles = []
+    apcontinue = None
+
+    while True:
+        params = {
+            "action":      "query",
+            "list":        "allpages",
+            "apnamespace": "0",
+            "aplimit":     "500",
+            "apfrom":      apcontinue or "",
+        }
         data = api_get(params)
         if not data:
             break
 
-        members = data.get("query", {}).get("categorymembers", [])
-        titles.extend((m["pageid"], m["title"]) for m in members)
+        pages = data.get("query", {}).get("allpages", [])
+        for p in pages:
+            # skip meta/utility pages
+            title = p["title"]
+            if any(skip in title for skip in [
+                "Signal_Identification", "Database", "Template",
+                "Adding_a_Signal", "Comments", "Requested",
+            ]):
+                continue
+            titles.append((p["pageid"], title))
 
-        cmcontinue = data.get("continue", {}).get("cmcontinue")
-        if not cmcontinue:
+        apcontinue = data.get("continue", {}).get("apcontinue")
+        if not apcontinue:
             break
+        time.sleep(0.5)
 
-        time.sleep(0.5)   # be polite
-
-    print(f"Found {len(titles)} signal pages in wiki category.")
     return titles
 
 
