@@ -248,63 +248,65 @@ def parse_freq_mhz(raw):
 
 def parse_wikitext_infobox(wikitext):
     """
-    Extract fields from the {{SIGID}} positional template used by sigidwiki.com.
+    Extract fields from the {{Signal}} template used by sigidwiki.com.
 
-    Template field order:
-      1. Signal name
-      2. Image
-      3. Frequency (may contain [[frequency::X MHz]] semantic links)
-      4. Modulation
-      5. Bandwidth
-      6. Location
+    Actual template format:
+      {{Signal
+      |Title=AFSK Paging Link
+      |Picture=...
+      |Frequencies=72 MHz, 76 MHz...
+      |Mode=NFM
+      |Modulation=AFSK
+      |Bandwidth=9 kHz
+      |Location=Worldwide
+      |Signal description=...
+      |Additional categories=...
+      }}
     """
     fields = {}
 
-    # find the {{SIGID ...}} block
-    m = re.search(r"\{\{SIGID(.*?)\}\}", wikitext, re.DOTALL)
-    if not m:
-        # try case-insensitive fallback
-        m = re.search(r"\{\{[Ss]igid(.*?)\}\}", wikitext, re.DOTALL)
+    # find the {{Signal ...}} block
+    m = re.search(r"\{\{Signal(.*?)\}\}", wikitext, re.DOTALL)
     if not m:
         return fields
 
     block = m.group(1)
 
-    # split on pipe characters, each pipe starts a new field
-    # filter out empty strings
-    parts = [p.strip() for p in block.split("|") if p.strip()]
-
-    # position 0 = signal name
-    # position 1 = image (skip)
-    # position 2 = frequency
-    # position 3 = modulation
-    # position 4 = bandwidth
-    # position 5 = location
-
     def clean(val):
         """Strip wiki markup from a value."""
-        # extract semantic link values: [[frequency::72 MHz]] -> 72 MHz
         val = re.sub(r"\[\[[^\]]*?::(.*?)\]\]", r"\1", val)
-        # strip remaining wiki links
         val = re.sub(r"\[\[(?:[^\|\]]+\|)?([^\]]+)\]\]", r"\1", val)
-        # strip image references
         val = re.sub(r"\[\[Image:.*?\]\]", "", val, flags=re.IGNORECASE)
-        # strip HTML tags
         val = re.sub(r"<.*?>", "", val)
-        # strip bold/italic markup
         val = re.sub(r"'{2,}", "", val)
         return val.strip()
 
-    if len(parts) > 0:
-        fields["name"] = clean(parts[0])
-    if len(parts) > 2:
-        fields["freq_raw"] = clean(parts[2])
-    if len(parts) > 3:
-        fields["modulation"] = clean(parts[3])
-    if len(parts) > 4:
-        fields["bandwidth_hz"] = clean(parts[4])
-    if len(parts) > 5:
-        fields["location"] = clean(parts[5])
+    # parse key=value pairs from pipe-separated lines
+    for line in block.splitlines():
+        line = line.strip().lstrip("|").strip()
+        if "=" in line:
+            key, _, val = line.partition("=")
+            key = key.strip().lower()
+            val = clean(val)
+            if not val:
+                continue
+            # map template field names to our DB field names
+            if key == "title":
+                fields["name"] = val
+            elif key in ("frequencies", "frequency"):
+                fields["freq_raw"] = val
+            elif key == "modulation":
+                fields["modulation"] = val
+            elif key == "bandwidth":
+                fields["bandwidth_hz"] = val
+            elif key == "location":
+                fields["location"] = val
+            elif key == "mode":
+                fields["mode"] = val
+            elif key == "signal description":
+                fields["description"] = val
+            elif key == "additional categories":
+                fields["categories_extra"] = val
 
     return fields
 
